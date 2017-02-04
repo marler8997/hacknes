@@ -118,7 +118,7 @@ ubyte CpuReadByteForLog(ushort addr)
   }
   if(addr < 0x4000) {
     // The first 8 bytes are mirrored 1024 times up to 0x4000.
-    return PpuIORead(addr & 0x07);
+    return PpuIOReadForLog(addr & 0x07);
   }
   if(addr < 0x8000) {
     printf("CpuReadByte: WARNING: unmapped address %04X\n", addr);
@@ -290,7 +290,7 @@ void SetFlagsFromCompare(ubyte left, ubyte right)
   {
     ubyte oldPReg = PReg;
     PReg = newFlags | (PReg & ~STATUS_MASK_CZN);
-    LOG_INSTRUCTION("Status " PSTATUS_DIFF_FMT, M, PSTATUS_DIFF_ARGS(oldPReg));
+    LOG_INSTRUCTION("Status " PSTATUS_DIFF_FMT, PSTATUS_DIFF_ARGS(oldPReg));
   }
 }
  
@@ -380,17 +380,15 @@ int runCpu()
     }                                                                   \
   } while(0)
   
-  for(size_t i = 0; i < 10000; i++) {
+  for(size_t i = 0; /*i < 100000*/; i++) {
 
     // Handle interrupts
-    // TODO: do I ignore these is STATUS_FLAG_NO_INTERRUPTS is set?
+    // TODO: do I ignore these if STATUS_FLAG_NO_INTERRUPTS is set?
     if(irqFlags) {
       if(irqFlags & IRQ_RESET) {
 	LOG_INSTRUCTION("IRQ_RESET");
 
-	//PCReg = *((ushort*)&memory[0xfffc]);
-        //PCReg = LITTLE_TO_HOST_ENDIAN(*(ushort*)&programRomBankC000[0xFFFC-0xC000]);
-        PCReg = 0xC000; // For test
+        PCReg = LITTLE_TO_HOST_ENDIAN(*(ushort*)&programRomBankC000[0xFFFC-0xC000]);
         printf("PCReg initialized to $%04X\n", PCReg);
 
 	jammed = false;
@@ -452,14 +450,33 @@ int runCpu()
       case 4:  // $10 BPL - Branch is Positive
         BRANCH("BPL", !(PReg & STATUS_FLAG_NEGATIVE));
         break;
-      case 5:  // $14
-        printf("Error: op $%02X not implemented\n", op); return 1;
+      NOP_ZEROPAGE_X:
+      case 5:  // $14 *NOP (Instruction not supported)
+	{
+	  PCReg++; // consumes opParam
+	  ubyte addr = XReg + opParam;
+	  TEST_LOG_SET_INFO("$%02X,X @ %02X = %02X", opParam, addr, CpuReadByteForLog(addr));
+	  TEST_LOG_1_ARG("*NOP");
+	  cpuCycled(2);
+	}
         break;
       case 6:  // $18 CLC - Clear Carry Flag
         CLEAR_PFLAG("CLC", STATUS_FLAG_CARRY);
         break;
-      case 7:  // $1C
-        printf("Error: op $%02X not implemented\n", op); return 1;
+      NOP_ABSOLUTE_X:
+      case 7:  // $1C *NOP (Instruction not supported)
+	opParam2 = CpuReadByte(PCReg+1);
+	PCReg += 2; // consume both op params
+	{
+	  ushort addr = (ushort)opParam2 << 8 | (ushort)opParam;
+	  ushort addrPlusX = addr + (ushort)XReg;
+	  TEST_LOG_SET_INFO("$%04X,X @ %04X = %02X", addr, addrPlusX, CpuReadByteForLog(addrPlusX));
+	  TEST_LOG_2_ARGS("*NOP");
+	  cpuCycled();
+	  if( ( (ushort)opParam+(ushort)XReg ) & 0x100) {
+	    cpuCycled(); // extra cycle if page boundary crossed
+	  }
+	}
         break;
       case 8:  // $20 JSR - Jump to Subroutine
         {
@@ -519,14 +536,12 @@ int runCpu()
         BRANCH("BMI", PReg & STATUS_FLAG_NEGATIVE);
         break;
       case 13: // $34
-        printf("Error: op $%02X not implemented\n", op); return 1;
-        break;
+	goto NOP_ZEROPAGE_X;
       case 14: // $38 SEC - Set Carry Flag
         SET_PFLAG("SEC", STATUS_FLAG_CARRY);
         break;
       case 15: // $3C
-        printf("Error: op $%02X not implemented\n", op); return 1;
-        break;
+	goto NOP_ABSOLUTE_X;
       case 16: // $40 RTI - Return from Interrupt
 	TEST_LOG_SET_INFO("");
 	TEST_LOG_0_ARGS("RTI");
@@ -564,14 +579,12 @@ int runCpu()
         BRANCH("BVC", !(PReg & STATUS_FLAG_OVERFLOW));
         break;
       case 21: // $54
-        printf("Error: op $%02X not implemented\n", op); return 1;
-        break;
+	goto NOP_ZEROPAGE_X;
       case 22: // $58
         printf("Error: op $%02X not implemented\n", op); return 1;
         break;
       case 23: // $5C
-        printf("Error: op $%02X not implemented\n", op); return 1;
-        break;
+	goto NOP_ABSOLUTE_X;
       case 24: // $60 RTS - Return from Subroutine
         {
           TEST_LOG_SET_INFO("");
@@ -625,16 +638,16 @@ int runCpu()
         BRANCH("BVS", PReg & STATUS_FLAG_OVERFLOW);
         break;
       case 29: // $74
-        printf("Error: op $%02X not implemented\n", op); return 1;
-        break;
+	goto NOP_ZEROPAGE_X;
       case 30: // $78 SEI - Set Interrupt Disable
         SET_PFLAG("SEI", STATUS_FLAG_NO_INTERRUPTS);
         break;
       case 31: // $7C
-        printf("Error: op $%02X not implemented\n", op); return 1;
-        break;
-      case 32: // $80
-        printf("Error: op $%02X not implemented\n", op); return 1;
+	goto NOP_ABSOLUTE_X;
+      case 32: // $80 NOP (Instruction not supported)
+	PCReg++; // consumes opParam
+	TEST_LOG_SET_INFO("#$%02X", opParam);
+	TEST_LOG_1_ARG("*NOP");
         break;
       case 33: // $84 STY - Store Y Register: ZeroPage
         PCReg++; // consumes opParam
@@ -776,14 +789,12 @@ int runCpu()
         BRANCH("BNE", !(PReg & STATUS_FLAG_ZERO));
         break;
       case 53: // $D4
-        printf("Error: op $%02X not implemented\n", op); return 1;
-        break;
+	goto NOP_ZEROPAGE_X;
       case 54: // $D8 CLD - Clear Decimal Mode
         CLEAR_PFLAG("CLD", STATUS_FLAG_DECIMAL_MODE);
         break;
       case 55: // $DC
-        printf("Error: op $%02X not implemented\n", op); return 1;
-        break;
+	goto NOP_ABSOLUTE_X;
       case 56: // $E0 CPX - Compare X Register: Immediate
         PCReg++; // consumes opParam
         TEST_LOG_SET_INFO("#$%02X", opParam);
@@ -816,14 +827,12 @@ int runCpu()
         BRANCH("BEQ", PReg & STATUS_FLAG_ZERO);
         break;
       case 61: // $F4
-        printf("Error: op $%02X not implemented\n", op); return 1;
-        break;
+	goto NOP_ZEROPAGE_X;
       case 62: // $F8 SED - Set Decimal Flag
         SET_PFLAG("SED", STATUS_FLAG_DECIMAL_MODE);
         break;
       case 63: // $FC
-        printf("Error: op $%02X not implemented\n", op); return 1;
-        break;
+	goto NOP_ABSOLUTE_X;
       }
       break;
       //
@@ -843,7 +852,7 @@ int runCpu()
 			      opParam, addrOfAddr, addrOfM, CpuReadByteForLog(addrOfM));
 	    TEST_LOG_1_ARG("STA");
 	    CpuWriteByte(addrOfM, AReg);
-	    LOG_INSTRUCTION("ZeroPage,X  X($%02X)+$%02X is %u", XReg, opParam, M);
+	    LOG_INSTRUCTION("ZeroPage,X  X($%02X)+$%02X is %u", XReg, opParam, AReg);
 	    cpuCycled(); // needs another cycle for some reason
 	  }
 	  break;
@@ -855,7 +864,7 @@ int runCpu()
 	  CpuWriteByte(opParam, AReg);
 	  break;
 	case 2: // ---010-- $89 STA Immediate
-	  printf("Error: invalid op $%02X\n, op (STA, immediate)\n");
+	  printf("Error: invalid op $%02X\n, op (STA, immediate)\n", op);
 	  return 1;
 	case 3: // ---011-- $8D STA Absolute
           opParam2 = CpuReadByte(PCReg+1);
@@ -1070,7 +1079,7 @@ int runCpu()
 	    {
 	      ubyte oldPReg = PReg;
 	      PReg = newFlags | (PReg & ~STATUS_MASK_CZON);
-              LOG_INSTRUCTION("ADC %u (carry=%u) Status 0x%02x > 0x%02x", M, saveCarry, oldPReg, PReg);
+              //LOG_INSTRUCTION("ADC %u (carry=%u) Status 0x%02x > 0x%02x", M, saveCarry, oldPReg, PReg);
 	    }
 	    AReg = totalUByte;
 	  }
@@ -1130,7 +1139,7 @@ int runCpu()
       if((op & 0xE0) == 0x80) { // 100----- STX (Special case for cc=10, the only instruction that does not read from memory)
 	switch( ( op >> 2 ) & 0x07) {
 	case 0: // ---000-- $82 STX - Store X Register : Immediate
-	  printf("Error: invalid op $%02X\n, op (STA, immediate)\n");
+	  printf("Error: invalid op $%02X\n, op (STA, immediate)\n", op);
 	  return 1;
 	case 1: // ---001-- $86 STX - Store X Register : ZeroPage
 	  PCReg++; // op consumes the param
@@ -1331,7 +1340,7 @@ int runCpu()
             }
             break;
           case 4: // ---100-- ????
-            printf("op $%02X (cc is 10) (bbb is 100) doesn't have any code to handle it\n"); return 1;
+            printf("op $%02X (cc is 10) (bbb is 100) doesn't have any code to handle it\n", op); return 1;
             break;
           case 5: // 101 ZeroPage,X | ZeroPage,Y
             PCReg++; // consumes opParam
@@ -1354,21 +1363,15 @@ int runCpu()
 	    }
             break;
           case 6: // ---110--
-            switch(op >> 5) {
-            case 0: printf("line %u: op $%02X not implemented\n", __LINE__, op); return 1;
-            case 1: printf("line %u: op $%02X not implemented\n", __LINE__, op); return 1;
-            case 2: printf("line %u: op $%02X not implemented\n", __LINE__, op); return 1;
-            case 3: printf("line %u: op $%02X not implemented\n", __LINE__, op); return 1;
-            case 4: printf("line %u: op $%02X not implemented\n", __LINE__, op); return 1;
-            case 5: // 101----- $BA TSX - Transfer Stack Pointer to X
+	    if(op == 0xBA) { // TSX - Transfer Stack Pointer to X
               TEST_LOG_SET_INFO("");
               TEST_LOG_0_ARGS("TSX");
               XReg = SPReg;
               UPDATE_STATUS_ZERO_NEGATIVE(XReg);
-              break;
-            case 6: printf("line %u: op $%02X not implemented\n", __LINE__, op); return 1;
-            case 7: printf("line %u: op $%02X not implemented\n", __LINE__, op); return 1;
-            }
+	    } else { // $1A, $3A, $5A, $7A, $DA, $FA NOP (Instruction not supported)
+	      TEST_LOG_SET_INFO("");
+	      TEST_LOG_0_ARGS("*NOP");
+	    }
             goto C10_DONE;
           case 7: // ---111-- Absolute,X | Absolute,Y
             opParam2 = CpuReadByte(PCReg+1);

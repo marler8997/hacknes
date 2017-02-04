@@ -2,6 +2,8 @@
 
 struct Cartridge
 {
+  MirrorType mirrorType;
+  
   ubyte* prgRom; // PRG Read-Only memory
   size_t prgRomSize;
 
@@ -23,3 +25,4 @@ struct Cartridge
 
   bool load(const char* filename);
 };
+

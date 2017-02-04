@@ -1,5 +1,8 @@
 #pragma once
 
+#define SCREEN_PIXEL_WIDTH  256
+#define SCREEN_PIXEL_HEIGHT 240
+
 // Register 0 (Control Register 1) (Write Only)
 // Register 1 (Control Register 2) (Write Only)
 // Register 2 (Status Register) (Read Only)
@@ -19,6 +22,25 @@
 
 // NOTE: Reading the Status registers clears the VBLANK bit,
 //       and also registers 5 and 6.
+
+#define PPU_PALETTE_SIZE 64
+struct PpuPalette
+{
+  ubyte red;
+  ubyte green;
+  ubyte blue;
+  /*
+  PpuPalette(ubyte red, ubyte green, ubyte blue) : red(red), green(green), blue(blue)
+  {
+  }
+  */
+};
+extern PpuPalette ppuPalette[PPU_PALETTE_SIZE];
+
+// Returns: 0 on success
+int PpuInit(MirrorType mirrorType);
+
+ubyte PpuIOReadForLog(ubyte addr);
 // Assumption: 0 <= addr <= 7
 ubyte PpuIORead(ubyte addr);
 // Assumption: 0 <= addr <= 7

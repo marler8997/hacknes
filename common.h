@@ -21,3 +21,11 @@ struct Buffer
   {
   }
 };
+
+enum MirrorType {
+  MIRROR_TYPE_HORIZONTAL    = 0x00,
+  MIRROR_TYPE_VERTICAL      = 0x01,
+  MIRROR_TYPE_NONE_USE_VRAM = 0x02,
+};
+
+extern bool graphicsEnabled;

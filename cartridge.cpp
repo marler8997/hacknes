@@ -29,15 +29,6 @@ void printFlags6(ubyte flags)
   printf(" 0000_0100: %u 512-byte trainer at $7000-$71FF (stored before PRG data)\n", flags & FLAGS6_TRAINER_MASK);
   printf(" 0000_0010: %u Cartridge contains battery-backed PRG RAM ($6000-7FFF) or other persistent memory\n", flags & 0x20);
   printf(" 0000_0001: %u Grapics type (bit 2)\n", flags & 0x01);
-  if(flags & 0x08) {
-    printf(" Graphics: four-screen VRAM (flags ----1---)\n");
-  } else {
-    if(flags & 0x01) {
-      printf(" Graphics: vertical arrangement/horizontal mirroring (CIRAM A10 = PPU A11) (flags ----0--1)\n");
-    } else {
-      printf(" Graphics: horizontal arrangement/vertical mirroring (CIRAM A10 = PPU A10) (flags ----0--0)\n");
-    }
-  }
 }
 void printFlags7(ubyte flags)
 {
@@ -89,8 +80,8 @@ bool Cartridge::load(const char* filename)
 
   #define PRG_ROM_16K_SIZE_INDEX 4
   #define CHR_ROM_8K_SIZE_INDEX  5
+  #define FLAGS_6_INDEX  5
 
-  ubyte flags6 = header[6];
   ubyte flags7 = header[7];
   ubyte prgRam8KSize = header[8];
   ubyte flags9 = header[9];
@@ -98,14 +89,27 @@ bool Cartridge::load(const char* filename)
 
   printf("prgRomSize %u (x 16K)\n", header[PRG_ROM_16K_SIZE_INDEX]);
   printf("chrRomSize %u (x 8K)\n", header[CHR_ROM_8K_SIZE_INDEX]);
-  printFlags6(flags6);
+  printFlags6(header[FLAGS_6_INDEX]);
+
+  this->mirrorType = (MirrorType)((header[FLAGS_6_INDEX] & 0x08) >> 3 | header[FLAGS_6_INDEX] & 0x01);
+  if(this->mirrorType == MIRROR_TYPE_HORIZONTAL) {
+    printf("Cartridge load: mirror type is horizontal\n");
+  } else if(this->mirrorType == MIRROR_TYPE_VERTICAL) {
+    printf("Cartridge load: mirror type is vertical\n");
+  } else if(this->mirrorType == MIRROR_TYPE_NONE_USE_VRAM) {
+    printf("Cartridge load: mirror type is none, using vram\n");
+  } else {
+    printf("Cartridge load: Error: invalid mirror type\n");
+    return false;
+  }
+
   printFlags7(flags7);
   printf("prgRamSize %u (x 8K)\n", prgRam8KSize);
   printFlags9(flags9);
   printf("flags10    0x%02x\n", flags10);
 
   size_t offset = 16;
-  if(flags6 & FLAGS6_TRAINER_MASK) {
+  if(header[FLAGS_6_INDEX] & FLAGS6_TRAINER_MASK) {
     printf("Cartridge load: Error: trainer mask not implemented\n");
   }
 
