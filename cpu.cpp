@@ -2,7 +2,9 @@
 #include <stdlib.h>
 
 #include "common.h"
+#include "cpuInterrupts.h"
 #include "platform.h"
+#include "audio.h"
 #include "cartridge.h"
 #include "ppu.h"
 
@@ -102,10 +104,15 @@ void cpuCycled(unsigned n)
   }
 }
 
+ubyte joypad1;
+ubyte joypad2;
+
 void DmaToPpu(ubyte startDividedBy256)
 {
   printf("[DEBUG] PpuDma $%02X (actual address $%04X)\n",
 	 startDividedBy256, startDividedBy256*256);
+  // TODO: implement the DMA
+  // TODO: probably disable the DMA if graphics are disabled
 }
 
 // Do not cycle the CPU
@@ -120,8 +127,24 @@ ubyte CpuReadByteForLog(ushort addr)
     // The first 8 bytes are mirrored 1024 times up to 0x4000.
     return PpuIOReadForLog(addr & 0x07);
   }
+  if(addr < 0x4020) {
+    // Nintendulator always seems to return 0xFF when logging this
+    return 0xFF;
+    /*
+    if(addr == 0x4015) {
+      return apuStatusRegister;
+    } else if(addr == 0x4016) {
+      return joypad1;
+    } else if(addr == 0x4017) {
+      return joypad2;
+    } else {
+      // The IO registers
+      return 0xFF; // Just return 0xFF for now
+    }
+    */
+  }
   if(addr < 0x8000) {
-    printf("CpuReadByte: WARNING: unmapped address %04X\n", addr);
+    printf("CpuReadByteForLog: WARNING: unmapped address %04X\n", addr);
     return 0;
   }
   if(addr < 0xC000) {
@@ -139,7 +162,24 @@ ubyte CpuReadByte(ushort addr)
   }
   if(addr < 0x4000) {
     // The first 8 bytes are mirrored 1024 times up to 0x4000.
+    cpuCycled();
     return PpuIORead(addr & 0x07);
+  }
+  if(addr < 0x4020) {
+    if(addr == 0x4015) {
+      return apuStatusRegister;
+    } else if(addr == 0x4016) {
+      cpuCycled();
+      printf("reading joypad1 as $%02X\n", joypad1);
+      return joypad1;
+    } else if(addr == 0x4017) {
+      cpuCycled();
+      printf("reading joypad2 as $%02X\n", joypad2);
+      return joypad2;
+    } else {
+      // The IO registers
+      return 0xFF; // Just return 0xFF for now
+    }
   }
   if(addr < 0x8000) {
     printf("CpuReadByte: WARNING: unmapped address %04X\n", addr);
@@ -163,8 +203,14 @@ ushort CpuReadShort(ushort addr)
   }
   if(addr < 0x4000) {
     // The first 8 bytes are mirrored 1024 times up to 0x4000.
+    cpuCycled(2);
     addr = addr & 0x07;
     return PpuIORead(addr+1) << 8 | PpuIORead(addr);
+  }
+  if(addr < 0x4020) {
+    printf("CpuReadShort $%04X not implemented\n", addr);
+    // The IO registers
+    return 0xFFFF; // Just return 0xFF for now
   }
   if(addr < 0x8000) {
     printf("CpuReadShort: WARNING: unmapped address %04X\n", addr);
@@ -188,14 +234,40 @@ void CpuWriteByte(ushort addr, ubyte value)
     ram[addr&0x7FF] = value;
   } else if(addr < 0x4000) {
     // The first 8 bytes are mirrored 1024 times up to 0x4000.
+    cpuCycled();
     PpuIOWrite(addr & 0x07, value);
-  } else if(addr < 0x8000) {
-    if(addr == 0x4014) {
+  } else if(addr < 0x4020) {
+    if(addr < 0x4010) {
+      ApuWriteChannelRegister(addr & 0x0F, value);
+      cpuCycled();
+    } else if(addr == 0x4014) {
       cpuCycled(512); // I think this is the right number of cycles
+      cpuCycled(2); // Nintendulator has a few more cycles
       DmaToPpu(value);
+    } else if(addr == 0x4015) {
+      apuStatusRegister = value;
+      cpuCycled();
+      ApuStatusRegisterDecoded decoded;
+      printf("apu sq1: %u, sq2: %u, tri: %u, noise: %u, dmc: %u, irq: %u\n",
+	     decoded.squareWave1Enabled, decoded.squareWave2Enabled, decoded.triangleWaveEnabled,
+             decoded.noiseEnabled, decoded.dmcEnabled, decoded.irqEnabled);
+    } else if(addr == 0x4016) {
+      cpuCycled();
+      joypad1 = value;
+      printf("set joypad1 to $%02X\n", value);
+    } else if(addr == 0x4017) {
+      cpuCycled();
+      joypad2 = value;
+      printf("set joypad2 to $%02X\n", value);
     } else {
-      printf("CpuWriteByte: WARNING: unmapped address $%04X\n", addr);
+      cpuCycled();
+      // The IO registers
+      printf("IO Register write value $%02X at $%04X not implemented\n",
+             value, addr);
     }
+  } else if(addr < 0x8000) {
+    cpuCycled();
+    printf("CpuWriteByte: WARNING: unmapped address $%04X\n", addr);
   } else {
     printf("Error: cannot write to address $%04X, because is is the cartridge ROM\n",
            addr);
@@ -245,8 +317,6 @@ ubyte CpuPopStack()
   return value;
 }
 
-#define IRQ_RESET 0x01
-
 #define LOG_STEP(fmt,...)
 //#define LOG_STEP(fmt,...) printf(fmt"\n", ##__VA_ARGS__)
 #define LOG_INSTRUCTION(fmt,...)
@@ -293,7 +363,9 @@ void SetFlagsFromCompare(ubyte left, ubyte right)
     LOG_INSTRUCTION("Status " PSTATUS_DIFF_FMT, PSTATUS_DIFF_ARGS(oldPReg));
   }
 }
- 
+
+ubyte interruptFlags;
+
 int runCpu()
 {
   // Setup MemoryMap to point to cartridge Program ROM banks
@@ -306,10 +378,8 @@ int runCpu()
     programRomBankC000 = cartridge.prgRom; // mirror the first bank
   }
 
-  ubyte irqFlags;
+  interruptFlags = RESET_INTERRUPT_FLAG;
   bool jammed;
-
-  irqFlags = IRQ_RESET;
 
 #ifdef ENABLE_TEST_LOG
   #define MAX_INFO_STRING 27
@@ -324,8 +394,9 @@ int runCpu()
 
   ushort savePCReg;
   ushort saveScanlineCycle;
-  #define TEST_PROC_STATUS_FMT "A:%02X X:%02X Y:%02X P:%02X SP:%02X CYC:%3u\n"
-  #define TEST_PROC_STATUS_ARGS AReg, XReg, YReg, PReg, SPReg, saveScanlineCycle
+  ushort saveScanline;
+  #define TEST_PROC_STATUS_FMT "A:%02X X:%02X Y:%02X P:%02X SP:%02X CYC:%3u SL:%d\n"
+  #define TEST_PROC_STATUS_ARGS AReg, XReg, YReg, PReg, SPReg, saveScanlineCycle, (saveScanline==261) ? -1 : saveScanline
   #define TEST_LOG_0_ARGS(name) printf("%04X  %02X       %4s %-27s " TEST_PROC_STATUS_FMT, \
                                        savePCReg, op, name, testInfoString, TEST_PROC_STATUS_ARGS);
   #define TEST_LOG_1_ARG(name) printf("%04X  %02X %02X    %4s %-27s "   TEST_PROC_STATUS_FMT, \
@@ -380,29 +451,56 @@ int runCpu()
     }                                                                   \
   } while(0)
   
-  for(size_t i = 0; /*i < 100000*/; i++) {
+  for(size_t i = 0; i < 100000; i++) {
 
     // Handle interrupts
     // TODO: do I ignore these if STATUS_FLAG_NO_INTERRUPTS is set?
-    if(irqFlags) {
-      if(irqFlags & IRQ_RESET) {
-	LOG_INSTRUCTION("IRQ_RESET");
+    while(interruptFlags) {
+      if(interruptFlags & IRQ_FLAG) {
+        if(PReg & STATUS_FLAG_NO_INTERRUPTS) {
+          printf("[DEBUG] an IRQ flag was masked by the status register\n");
+          // break if there are no other type of interrupts
+          if((interruptFlags & ~IRQ_FLAG) == 0) {
+            break;
+          }
+        } else {
+          printf("IRQ not implemented\n");
+          return 1; // error
+        }
+      }
 
+      if(interruptFlags & NMI_FLAG) {
+        printf("NMI!\n");
+        cpuCycled(2);
+        CpuPushStack(PCReg >> 8);
+        CpuPushStack(PCReg);
+        CpuPushStack(PReg);
+        PReg |= STATUS_FLAG_NO_INTERRUPTS; // temporarily disable interrupts
+        PCReg = CpuReadShort(0xFFFA);
+        interruptFlags &= ~NMI_FLAG;
+      }
+
+      if(interruptFlags & RESET_INTERRUPT_FLAG) {
+        LOG_INSTRUCTION("RESET_INTERRUPT");
+
+        //PCReg = CpuReadShort(0xFFFC);
         PCReg = LITTLE_TO_HOST_ENDIAN(*(ushort*)&programRomBankC000[0xFFFC-0xC000]);
-        printf("PCReg initialized to $%04X\n", PCReg);
-
-	jammed = false;
-	PReg = STATUS_FLAG_NO_INTERRUPTS;
-	irqFlags &= ~IRQ_RESET;
-	SPReg = 0xFD; // TODO: am I supposed to set this here? FECU doesn't?
+        printf("RESET_INTERRUPT: PCReg initialized to $%04X\n", PCReg);
+        
+        cycleCount = 0; // reset cpu cycle count
+        jammed = false;
+        PReg = STATUS_FLAG_NO_INTERRUPTS;
+        interruptFlags &= ~RESET_INTERRUPT_FLAG;
+        SPReg = 0xFD; // TODO: am I supposed to set this here? FECU doesn't?
         PReg = STATUS_FLAG_UNDEFINED_20 | STATUS_FLAG_NO_INTERRUPTS;
-	// TODO: initialize the mapper
+        // TODO: initialize the mapper
       }
     }
 
 #ifdef ENABLE_TEST_LOG
     savePCReg = PCReg;
     saveScanlineCycle = ppuState.scanlineCycle;
+    saveScanline = ppuState.scanline;
 #endif
     
     // The CPU always reads 2 bytes during the fetch cycle
@@ -940,7 +1038,7 @@ int runCpu()
 	ubyte M;
 	
 	switch((op >> 2) & 0x07) {
-	case 0: // 000 (ZeroPage,X)
+	case 0: // ---000-- (ZeroPage,X)
 	  PCReg++; // consumes opParam
 	  TEST_LOG_SET_1_ARG();
 	  {
@@ -953,32 +1051,34 @@ int runCpu()
 	    cpuCycled(); // needs another cycle for some reason
 	  }
 	  break;
-	case 1: // 001 ZeroPage
+	case 1: // ---001-- ZeroPage
 	  PCReg++; // consumes opParam
           TEST_LOG_SET_1_ARG();
 	  M = CpuReadByte(opParam);
 	  TEST_LOG_SET_INFO("$%02X = %02X", opParam, M);
 	  LOG_INSTRUCTION("ZeroPage $%02X is %u", opParam, M);
 	  break;
-	case 2: // 010 Immediate
+	case 2: // ---010-- Immediate
 	  PCReg++; // consumes opParam
           TEST_LOG_SET_1_ARG();
 	  M = opParam;
           TEST_LOG_SET_INFO("#$%02X", opParam);
           LOG_INSTRUCTION("#immediate is $%02X", M);
 	  break;
-	case 3: // 011 Absolute
+	case 3: // ---011-- Absolute
           opParam2 = CpuReadByte(PCReg+1);
           {
 	    ushort immediate = (((ushort)opParam2) << 8) | (ushort)opParam;
             PCReg += 2;
             TEST_LOG_SET_2_ARGS();
             M = CpuReadByte(immediate);
-            TEST_LOG_SET_INFO("$%04X = %02X", immediate, M);
+            // Note: only using the second version because it matches Nintendulator
+            //TEST_LOG_SET_INFO("$%04X = %02X", immediate, M);
+            TEST_LOG_SET_INFO("$%04X = %02X", immediate, CpuReadByteForLog(immediate));
             LOG_INSTRUCTION("absolute $%04X is %u", immediate, M);
           }
 	  break;
-	case 4: // 100 (ZeroPage),Y
+	case 4: // ---100-- (ZeroPage),Y
 	  PCReg++; // consumes opParam
 	  TEST_LOG_SET_1_ARG();
 	  {
@@ -994,7 +1094,7 @@ int runCpu()
 	    }
 	  }
 	  break;
-	case 5: // 101 ZeroPage,X
+	case 5: // ---101-- ZeroPage,X
 	  PCReg++; // consumes opParam
 	  {
 	    ubyte addr = XReg + opParam;
@@ -1005,7 +1105,7 @@ int runCpu()
 	    cpuCycled(); // needs another cycle for some reason
 	  }
 	  break;
-	case 6: // 110 Absolute,Y
+	case 6: // ---110-- Absolute,Y
 	  opParam2 = CpuReadByte(PCReg+1);
 	  PCReg += 2;
 	  TEST_LOG_SET_2_ARGS();
@@ -1022,7 +1122,7 @@ int runCpu()
 	    break;
 	  }
 	  break;
-	case 7: // 111 Absolute,X
+	case 7: // ---111-- Absolute,X
 	  opParam2 = CpuReadByte(PCReg+1);
 	  PCReg += 2;
 	  TEST_LOG_SET_2_ARGS();
@@ -1030,8 +1130,9 @@ int runCpu()
 	    ushort immediate = (((ushort)opParam2) << 8) | (ushort)opParam;
 	    ushort addrOfM = (ushort)XReg + immediate;
 	    M = CpuReadByte(addrOfM);
-	    TEST_LOG_SET_INFO("$%04X,X @ %04X = %02X",
-			      immediate, addrOfM, M);
+            // Modified to match Nintendulator
+	    //TEST_LOG_SET_INFO("$%04X,X @ %04X = %02X", immediate, addrOfM, M);
+	    TEST_LOG_SET_INFO("$%04X,X @ %04X = %02X", immediate, addrOfM, CpuReadByteForLog(addrOfM));
 	    LOG_INSTRUCTION("absolute,X(%u) is $%04X (%u)", XReg, M, M);
 	    if(((ushort)XReg+(ushort)opParam) & 0x100) {
 	      cpuCycled();
@@ -1041,22 +1142,22 @@ int runCpu()
 	}
 
 	switch(op >> 5) {
-	case 0: // ---000-- ORA
+	case 0: // 000----- ORA
           TEST_LOG_PRESET_ARGS("ORA");
           AReg = AReg | M;
           UPDATE_STATUS_ZERO_NEGATIVE(AReg);
 	  break;
-	case 1: // ---001-- AND
+	case 1: // 001----- AND
           TEST_LOG_PRESET_ARGS("AND");
           AReg = AReg & M;
           UPDATE_STATUS_ZERO_NEGATIVE(AReg);
 	  break;
-	case 2: // ---010-- EOR - Exclusive OR
+	case 2: // 010----- EOR - Exclusive OR
           TEST_LOG_PRESET_ARGS("EOR");
           AReg = AReg ^ M;
           UPDATE_STATUS_ZERO_NEGATIVE(AReg);
 	  break;
-	case 3: // ---011-- ADC - Add with Carry
+	case 3: // 011----- ADC - Add with Carry
           TEST_LOG_PRESET_ARGS("ADC");
 	  {
             ushort totalUShort = (ushort)AReg + (ushort)M + (ushort)(PReg & STATUS_FLAG_CARRY);
@@ -1084,20 +1185,20 @@ int runCpu()
 	    AReg = totalUByte;
 	  }
 	  break;
-	case 4: // ---100-- STA
+	case 4: // 100----- STA
           ASSERT_INVALID_CODE_PATH(__LINE__);
 	  break;
-	case 5: // ---101-- $A1, $A5, $A9, $AD, $B1, $B5, $B9, $BD LDA
+	case 5: // 101----- $A1, $A5, $A9, $AD, $B1, $B5, $B9, $BD LDA
           TEST_LOG_PRESET_ARGS("LDA");
 	  AReg = M;
 	  LOG_INSTRUCTION("LDA A = %u", AReg);
 	  UPDATE_STATUS_ZERO_NEGATIVE(AReg);
 	  break;
-	case 6: // ---110-- CMP - Compare
+	case 6: // 110----- CMP - Compare
           TEST_LOG_PRESET_ARGS("CMP");
           SetFlagsFromCompare(AReg, M);
 	  break;
-	case 7: // ---111-- SBC
+	case 7: // 111----- SBC
           TEST_LOG_PRESET_ARGS("SBC");
           {
             ubyte rightHandSide =
@@ -1334,7 +1435,9 @@ int runCpu()
               TEST_LOG_SET_2_ARGS();
 	      MWriteBackAddr = immediate;
               M = CpuReadByte(immediate);
-              TEST_LOG_SET_INFO("$%04X = %02X", immediate, M);
+              // Modified to match Nintendulator
+              //TEST_LOG_SET_INFO("$%04X = %02X", immediate, M);
+              TEST_LOG_SET_INFO("$%04X = %02X", immediate, CpuReadByteForLog(immediate));
               LOG_INSTRUCTION("absolute $%04X is %u", immediate, M);
               //cpuCycled(); // needs another cycle for some reason
             }

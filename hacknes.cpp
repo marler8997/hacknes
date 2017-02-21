@@ -6,15 +6,18 @@
 #include "platform.h"
 #include "cartridge.h"
 #include "graphics.h"
+#include "audio.h"
 #include "cpu.h"
 #include "ppu.h"
 
+bool audioEnabled = true;
 bool graphicsEnabled = true;
 static int overrideStartAddress = -1;
 
 void PrintUsage()
 {
   printf("Usage: hacknes [options] <rom-file>\n");
+  printf("  --no-audio               Disable audio\n");
   printf("  --no-graphics            Disable graphics\n");
   printf("  --start-address <hex>    Address to start execution\n");
 }
@@ -26,7 +29,9 @@ int ParseCommandLine(int argc, const char* argv[])
     if(currentArg[0] != '-') {
       argv[newArgc++] = currentArg;
     } else {
-      if(strcmp(currentArg, "--no-graphics") == 0) {
+      if(strcmp(currentArg, "--no-audio") == 0) {
+        audioEnabled = false;
+      } else if(strcmp(currentArg, "--no-graphics") == 0) {
         graphicsEnabled = false;
       } else if(strcmp(currentArg, "--start-address") == 0) {
         i++;
@@ -77,6 +82,11 @@ int main(int argc, const char* argv[])
 
   if(graphicsEnabled) {
     if(!setupGraphics()) {
+      return 1;
+    }
+  }
+  if(audioEnabled) {
+    if(!setupAudio()) {
       return 1;
     }
   }

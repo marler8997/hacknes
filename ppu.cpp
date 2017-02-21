@@ -1,11 +1,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "common.h"
+#include "cpuInterrupts.h"
 #include "ppu.h"
 #include "graphics.h"
 
 #define CYCLES_PER_SCANLINE 341
+#define VBLANK_SCANLINE 241
 #define SCANLINES_PER_FRAME 262
+
 
 PpuPalette ppuPalette[PPU_PALETTE_SIZE] = {
   84 , 84,  84,      0,  30, 116,      8,  16, 144,     48,   0, 136,
@@ -26,15 +29,16 @@ PpuPalette ppuPalette[PPU_PALETTE_SIZE] = {
 
 
 // Control Register 1 Values
-ubyte controlRegister1 = 0;
-struct DecodedControlRegister
+ubyte controlRegister1;
+ubyte controlRegister2;
+struct DecodedControlRegister1
 {
   ushort autoIncrement;
   ushort spritePatternTableAddr;
   ushort backgroundPatternTableAddr;
   bool sprite8X16Mode;
   bool vblankNmiEnabled;
-  DecodedControlRegister() :
+  DecodedControlRegister1() :
     autoIncrement              ((controlRegister1 & PPU_CONTROL_REGISTER_1_AUTO_INCREMENT_32) ? 32 : 1),
     spritePatternTableAddr     ((controlRegister1 & PPU_CONTROL_REGISTER_1_SPRITE_TABLE_LOC) ? 0x1000 : 0),
     backgroundPatternTableAddr ((controlRegister1 & PPU_CONTROL_REGISTER_1_BACKGROUND_TABLE_LOC) ? 0x1000 : 0),
@@ -43,9 +47,34 @@ struct DecodedControlRegister
   {
   }
 };
+struct DecodedControlRegister2
+{
+  bool monochromeMode;     // 1 = monochrome, 0 = color
+  bool showFullBackground; // 1 = show full background (do not clip the left 8 pixels on screen)
+  bool showFullSprites;    // 1 = show full sprites (do no clip the left 8 pixels on screen)
+  bool enableBackground;   // 1 = enable background, 0 = disable background
+  bool enableSprites;      // 1 = enable sprites, 0 = disable sprites
+  ubyte backgroundColor;   // indicates background color in color more, or color intensity in monochrome mode.
+  DecodedControlRegister2() :
+    monochromeMode     ((controlRegister2 & PPU_CONTROL_REGISTER_2_MONOCHROME_MODE     ) ? true : false),
+    showFullBackground ((controlRegister2 & PPU_CONTROL_REGISTER_2_SHOW_FULL_BACKGROUND) ? true : false),
+    showFullSprites    ((controlRegister2 & PPU_CONTROL_REGISTER_2_SHOW_FULL_SPRITES   ) ? true : false),
+    enableBackground   ((controlRegister2 & PPU_CONTROL_REGISTER_2_ENABLE_BACKGROUND   ) ? true : false),
+    enableSprites      ((controlRegister2 & PPU_CONTROL_REGISTER_2_ENABLE_SPRITES      ) ? true : false),
+    backgroundColor    ((controlRegister2 & PPU_CONTROL_REGISTER_2_BG_COLOR_MASK) >> 5)
+  {
+  }
+};
 
 // Status Register
 ubyte statusRegister = 0;
+
+// The Toggle variables are used to know if a write to the vramIOAddress
+// is going to the upper or lower byte
+bool scrollPositionToggle;
+bool vramIOAddressToggle;
+ushort scrollPosition; // mapped to cpu address $2005
+ushort vramIOAddress; // mapped to cpu address $2006
 
 // 2 pattern tables, each $1000 bytes long
 // each sprite in the pattern table is 16 bytes long.
@@ -80,6 +109,16 @@ ubyte imageAndSpritePalettes[32];
 static ubyte* pixelBuffer;
 int PpuInit(MirrorType mirrorType)
 {
+  // Initial values of the ppu based on the Nintendulator logs
+  // ----------------------------------------
+  ppuState.scanline = 241;
+  statusRegister = PPU_STATUS_REGISTER_ACCEPTING_WRITES;
+  // ----------------------------------------
+  controlRegister1 = 0;
+  controlRegister2 = 0;
+  scrollPositionToggle = false;
+  vramIOAddressToggle = false;
+  
   // Setup nameTableMaps based on mirrorType
   switch(mirrorType) {
   case MIRROR_TYPE_HORIZONTAL:
@@ -113,68 +152,6 @@ int PpuInit(MirrorType mirrorType)
 #define LOG_IO(fmt,...)
 //#define LOG_IO(fmt,...) printf(fmt"\n", ##__VA_ARGS__)
 
-ubyte PpuIOReadForLog(ubyte addr)
-{
-  if(addr == 0x02) {
-    return statusRegister;
-  } else if(addr == 0x07) {
-    return 0; // NOT: NOT IMPLEMENTED!
-  }
-  return 0;
-}
-
-// Assumption: 0 <= addr <= 7
-ubyte PpuIORead(ubyte addr)
-{
-  if(addr == 0x02) {
-    LOG_IO("[DEBUG] PpuIORead $02 (StatusRegister) $%02X", statusRegister);
-    return statusRegister;
-  } else if(addr == 0x07) {
-    LOG_IO("[DEBUG] PpuIORead $07 NOT IMPLEMENTED");
-    return 0;
-  }
-  printf("WARNING: PpuIORead $%02X is invalid\n", addr);
-  return 0;
-}
-// Assumption: 0 <= addr <= 7
-void PpuIOWrite(ubyte addr, ubyte value)
-{
-  LOG_IO("[DEBUG] PpuIOWrite $%02X value $%02X (%d) (%u)",
-	 addr, value, value, value);
-  switch(addr) {
-  case 0:
-    controlRegister1 = value;
-    {
-      DecodedControlRegister decoded;
-      printf("ppu control_1: inc %u, sprite_loc $%04X, bg_loc $%04X, 8x16 %u, vblank_nmi %u\n",
-	     decoded.autoIncrement, decoded.spritePatternTableAddr, decoded.backgroundPatternTableAddr,
-	     decoded.sprite8X16Mode, decoded.vblankNmiEnabled);
-    }
-    break;
-  case 1:
-    printf("PpuIOWrite 1 not implemented\n");
-    break;
-  case 2:
-    printf("PpuIOWrite 2 not implemented\n");
-    break;
-  case 3:
-    printf("PpuIOWrite 3 not implemented\n");
-    break;
-  case 4:
-    printf("PpuIOWrite 4 not implemented\n");
-    break;
-  case 5:
-    printf("PpuIOWrite 5 not implemented\n");
-    break;
-  case 6:
-    printf("PpuIOWrite 6 not implemented\n");
-    break;
-  case 7:
-    printf("PpuIOWrite 7 not implemented\n");
-    break;
-  }
-}
-
 // TODO: Using a generic memory mapped function like this
 //       may not be the most efficient way to do most things
 //       in the PPU. Then again, this function is actually pretty
@@ -197,7 +174,130 @@ ubyte PpuReadByte(ushort addr)
   // Addresses are normalized to the first $20 by masking with $1F.
   return imageAndSpritePalettes[addr & 0x1F];
 }
+void PpuWriteByte(ushort addr, ubyte value)
+{
+  addr &= 0x3FFF; // Normalize $4000 - $FFFF to $0000 - $3FFF
 
+  if(addr < 0x2000) { // Pattern tables
+    //printf("PpuWriteByte: write $%02X to address $%04X (pattern table)\n", value, addr);
+    patternTables[addr] = value;
+  } else if(addr < 0x3F00) { // Name tables
+    //printf("PpuWriteByte: write $%02X to address $%04X (name table)\n", value, addr);
+    // The name table index will be in these 2
+    // bits: ---- XX-- ---- ----
+    *nameTableMemoryMap[(addr >> 10) & 0x3] = value;
+  } else {
+    // image and sprite color palettes
+    // The first $20 bytes are mirrored up to $3FFF
+    // Addresses are normalized to the first $20 by masking with $1F.
+    //printf("PpuWriteByte: write $%02X to address $%04X (palette)\n", value, addr);
+    imageAndSpritePalettes[addr & 0x1F] = value;
+  }
+}
+
+
+
+ubyte PpuIOReadForLog(ubyte addr)
+{
+  return 0xFF; // not right, but this is what Nintendulator seems to do in it's logs
+  /*
+  if(addr == 0x00) {
+    return 0xFF; // not right, but this is what Nintendulator seems to do in it's logs
+    //return controlRegister1;
+  } else if(addr == 0x02) {
+    return 0xFF; // not right, but this is what Nintendulator seems to do in it's logs
+    //return statusRegister;
+  } else if(addr == 0x07) {
+    return 0; // NOT: NOT IMPLEMENTED!
+  }
+  printf("WARNING: PpuIOReadForLog(0x%x) not implemented\n", addr);
+  return 0;
+  */
+}
+// Assumption: 0 <= addr <= 7
+ubyte PpuIORead(ubyte addr)
+{
+  if(addr == 0x02) {
+    LOG_IO("[DEBUG] PpuIORead $02 (StatusRegister) $%02X", statusRegister);
+    
+    // clear vblank if it is asserted
+    if(statusRegister & PPU_STATUS_REGISTER_VBLANK) {
+      ubyte saveStatusRegister = statusRegister;
+      statusRegister &= ~PPU_STATUS_REGISTER_VBLANK;
+      return saveStatusRegister;
+    }
+    
+    return statusRegister;
+  } else if(addr == 0x07) {
+    LOG_IO("[DEBUG] PpuIORead $07 NOT IMPLEMENTED");
+    return 0;
+  }
+  printf("WARNING: PpuIORead $%02X is invalid\n", addr);
+  return 0;
+}
+// Assumption: 0 <= addr <= 7
+void PpuIOWrite(ubyte addr, ubyte value)
+{
+  LOG_IO("[DEBUG] PpuIOWrite $%02X value $%02X (%d) (%u)",
+	 addr, value, value, value);
+  switch(addr) {
+  case 0:
+    controlRegister1 = value;
+    {
+      DecodedControlRegister1 decoded;
+      printf("ppu control_1: inc %u, sprite_loc $%04X, bg_loc $%04X, 8x16 %u, vblank_nmi %u\n",
+	     decoded.autoIncrement, decoded.spritePatternTableAddr, decoded.backgroundPatternTableAddr,
+	     decoded.sprite8X16Mode, decoded.vblankNmiEnabled);
+    }
+    break;
+  case 1:
+    controlRegister2 = value;
+    {
+      DecodedControlRegister2 decoded;
+      printf("ppu control_2: mono %u, full_bg %u, full_sprites %u, bg_enabled %u, sprites_enabled %u, bg %u\n",
+	     decoded.monochromeMode, decoded.showFullBackground, decoded.showFullSprites,
+             decoded.enableBackground, decoded.enableSprites, decoded.backgroundColor);
+    }
+    break;
+  case 2:
+    printf("PpuIOWrite 2 not implemented\n");
+    break;
+  case 3:
+    printf("PpuIOWrite 3 not implemented\n");
+    break;
+  case 4:
+    printf("PpuIOWrite 4 not implemented\n");
+    break;
+  case 5:
+    if(scrollPositionToggle) {
+      scrollPosition = ((ushort)value) << 8 | (scrollPosition & 0xFF);
+    } else {
+      scrollPosition = (ushort)value | (scrollPosition & 0xFF00);
+    }
+    scrollPositionToggle = !scrollPositionToggle;
+    printf("PpuIOWrite 5 ($%02x) (scrollPosition = $%04x)\n", value, scrollPosition);
+    break;
+  case 6:
+    if(vramIOAddressToggle) {
+      vramIOAddress = ((ushort)value) << 8 | (vramIOAddress & 0xFF);
+    } else {
+      vramIOAddress = (ushort)value | (vramIOAddress & 0xFF00);
+    }
+    vramIOAddressToggle = !vramIOAddressToggle;
+    printf("PpuIOWrite 6 ($%02x) (vramIOAddress = $%04x)\n", value, vramIOAddress);
+    break;
+  case 7:
+    PpuWriteByte(vramIOAddress, value);
+    if(controlRegister1 & PPU_CONTROL_REGISTER_1_AUTO_INCREMENT_32) {
+      //printf("vramIOAddress += 32 (%u)\n", vramIOAddress);
+      vramIOAddress += 32;
+    } else {
+      //printf("vramIOAddress +=  1 (%u)\n", vramIOAddress);
+      vramIOAddress++;
+    }
+    break;
+  }
+}
 
 static size_t ppuStepCount = 0;
 
@@ -231,15 +331,18 @@ void ppuStep()
       statusRegister &= ~PPU_STATUS_REGISTER_VBLANK;
       // TODO: setStatusSpriteOverflow to FALSE
       // TODO: setStatusSpriteCollisionHit to FALSE
-    } else if(ppuState.scanline == SCANLINES_PER_FRAME) {
-      //printf("ppu: FRAME DONE!\n");
+    } else if(ppuState.scanline == VBLANK_SCANLINE) {
+      printf("ppu: set vblank!\n");
       statusRegister |= PPU_STATUS_REGISTER_VBLANK;
-      //printf("ppu: set vblank!\n");
-      ppuState.scanline = 0;
       if(controlRegister1 & PPU_CONTROL_REGISTER_1_ENABLE_VBLANK_NMI) {
-	// TODO: generate NMI
-	//printf("ppu: generate NMI!\n");
+	printf("ppu: generate NMI!\n");
+        interruptFlags |= NMI_FLAG;
+      } else {
+        printf("ppu: NOT generating NMI, it is disabled\n");
       }
+    } else if(ppuState.scanline == SCANLINES_PER_FRAME) {
+      printf("ppu: FRAME DONE!\n");
+      ppuState.scanline = 0;
     }
   }
 }

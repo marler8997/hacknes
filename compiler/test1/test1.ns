@@ -1,0 +1,11 @@
+# MirrorType (Horizontal | Vertical | UseVram)
+# Default is Horizontal
+MirrorType UseVram
+
+# BatteryBackedRam (False | True)
+# Default is False
+BatteryBackedRam False
+
+# This code is taken from smb.nes for now
+SEI
+CLD
