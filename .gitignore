@@ -1,3 +1,6 @@
 *~
 *.exe
 *.obj
+zig-cache/
+zig-out/
+/dep/
