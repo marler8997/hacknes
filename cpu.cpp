@@ -383,7 +383,7 @@ int runCpu()
 
 #ifdef ENABLE_TEST_LOG
   #define MAX_INFO_STRING 27
-  
+
   char testOpArgString[6];
   #define TEST_LOG_SET_NO_ARGS() testOpArgString[0] = '\0'
   #define TEST_LOG_SET_1_ARG()   sprintf(testOpArgString, "%02X", opParam)
@@ -395,22 +395,22 @@ int runCpu()
   ushort savePCReg;
   ushort saveScanlineCycle;
   ushort saveScanline;
-  #define TEST_PROC_STATUS_FMT "A:%02X X:%02X Y:%02X P:%02X SP:%02X CYC:%3u SL:%d\n"
+  #define TEST_PROC_STATUS_FMT "!!! A:%02X X:%02X Y:%02X P:%02X SP:%02X CYC:%3u SL:%d\n"
   #define TEST_PROC_STATUS_ARGS AReg, XReg, YReg, PReg, SPReg, saveScanlineCycle, (saveScanline==261) ? -1 : saveScanline
-  #define TEST_LOG_0_ARGS(name) printf("%04X  %02X       %4s %-27s " TEST_PROC_STATUS_FMT, \
-                                       savePCReg, op, name, testInfoString, TEST_PROC_STATUS_ARGS);
-  #define TEST_LOG_1_ARG(name) printf("%04X  %02X %02X    %4s %-27s "   TEST_PROC_STATUS_FMT, \
-                                      savePCReg, op, opParam, name, testInfoString, TEST_PROC_STATUS_ARGS);
-  #define TEST_LOG_2_ARGS(name) printf("%04X  %02X %02X %02X %4s %-27s " TEST_PROC_STATUS_FMT, \
-                                       savePCReg, op, opParam, opParam2, name, testInfoString, TEST_PROC_STATUS_ARGS);
-  #define TEST_LOG_PRESET_ARGS(name) printf("%04X  %02X %-5s %4s %-27s " TEST_PROC_STATUS_FMT, \
-                                            savePCReg, op, testOpArgString, name, testInfoString, TEST_PROC_STATUS_ARGS);
+  #define TEST_LOG_0_ARGS(name) printf(TEST_PROC_STATUS_FMT "%04X  %02X       %4s %-27s ", \
+                                       TEST_PROC_STATUS_ARGS, savePCReg, op, name, testInfoString);
+  #define TEST_LOG_1_ARG(name) printf(TEST_PROC_STATUS_FMT "%04X  %02X %02X    %4s %-27s ", \
+                                      TEST_PROC_STATUS_ARGS, savePCReg, op, opParam, name, testInfoString);
+  #define TEST_LOG_2_ARGS(name) printf(TEST_PROC_STATUS_FMT "%04X  %02X %02X %02X %4s %-27s ", \
+                                       TEST_PROC_STATUS_ARGS, savePCReg, op, opParam, opParam2, name, testInfoString);
+  #define TEST_LOG_PRESET_ARGS(name) printf(TEST_PROC_STATUS_FMT "%04X  %02X %-5s %4s %-27s ", \
+                                            TEST_PROC_STATUS_ARGS, savePCReg, op, testOpArgString, name, testInfoString);
 #else
   #define TEST_LOG_SET_NO_ARGS()
   #define TEST_LOG_SET_1_ARG()
   #define TEST_LOG_SET_2_ARGS()
   #define TEST_LOG_SET_INFO(fmt,...)
-  
+
   #define TEST_LOG_0_ARGS(name)
   #define TEST_LOG_1_ARG(name)
   #define TEST_LOG_2_ARGS(name)
@@ -431,7 +431,7 @@ int runCpu()
       LOG_INSTRUCTION(name " %d (NOT JUMPING)", (sbyte)opParam);        \
     }                                                                   \
   } while(0)
-  
+
 #define SET_PFLAG(name,flag) do {                                       \
     TEST_LOG_SET_INFO("");                                              \
     TEST_LOG_0_ARGS(name);                                              \
@@ -450,7 +450,7 @@ int runCpu()
       LOG_INSTRUCTION(name "  Status " PSTATUS_DIFF_FMT, PSTATUS_DIFF_ARGS(oldPReg)); \
     }                                                                   \
   } while(0)
-  
+
   for(size_t i = 0; i < 100000; i++) {
 
     // Handle interrupts
@@ -486,7 +486,7 @@ int runCpu()
         //PCReg = CpuReadShort(0xFFFC);
         PCReg = LITTLE_TO_HOST_ENDIAN(*(ushort*)&programRomBankC000[0xFFFC-0xC000]);
         printf("RESET_INTERRUPT: PCReg initialized to $%04X\n", PCReg);
-        
+
         cycleCount = 0; // reset cpu cycle count
         jammed = false;
         PReg = STATUS_FLAG_NO_INTERRUPTS;
@@ -502,7 +502,7 @@ int runCpu()
     saveScanlineCycle = ppuState.scanlineCycle;
     saveScanline = ppuState.scanline;
 #endif
-    
+
     // The CPU always reads 2 bytes during the fetch cycle
     ubyte op      = CpuReadByte(PCReg++);
     ubyte opParam = CpuReadByte(PCReg);
@@ -1036,7 +1036,7 @@ int runCpu()
       } else {
 
 	ubyte M;
-	
+
 	switch((op >> 2) & 0x07) {
 	case 0: // ---000-- (ZeroPage,X)
 	  PCReg++; // consumes opParam
@@ -1458,7 +1458,7 @@ int runCpu()
 		regValue = XReg;
 		regChar = 'X';
 	      }
-	      MWriteBackAddr = (ubyte)(regValue + opParam); 
+	      MWriteBackAddr = (ubyte)(regValue + opParam);
 	      M = CpuReadByte((ushort)MWriteBackAddr);
 	      TEST_LOG_SET_INFO("$%02X,%c @ %02X = %02X", opParam, regChar, MWriteBackAddr, M);
 	      LOG_INSTRUCTION("ZeroPage,%c  X($%02X)+$%02X is %u", regChar, regValue, opParam, M);
@@ -1491,7 +1491,7 @@ int runCpu()
 		regValue = XReg;
 		regChar = 'X';
 	      }
-	      
+
 	      MWriteBackAddr = (ushort)regValue + immediate;
               M = CpuReadByte((ushort)MWriteBackAddr);
 	      TEST_LOG_SET_INFO("$%04X,%c @ %04X = %02X", immediate, regChar, MWriteBackAddr, M);

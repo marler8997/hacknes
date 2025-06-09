@@ -2,6 +2,9 @@
 
 Current development procedure
 --------------------------------------------------------------------------------
+Download FCEUX and enable trace logging to a file, then run hackness and you
+can compre the two logs to see where the agree.
+
 I'm using nestest.nes to develop the cpu emulator.
 
 Uncomment ENABLE_TEST_LOG in cpu.cpp

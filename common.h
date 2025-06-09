@@ -28,4 +28,8 @@ enum MirrorType {
   MIRROR_TYPE_NONE_USE_VRAM = 0x02,
 };
 
+extern "C" {
+
 extern bool graphicsEnabled;
+
+}
