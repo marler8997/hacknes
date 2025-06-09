@@ -1,0 +1,13 @@
+.{
+    .name = .hacknes,
+    .fingerprint = 0x47e725d28cb13e37,
+    .version = "0.0.0",
+    .minimum_zig_version = "0.14.1",
+    .dependencies = .{
+        .nes_test_roms = .{
+            .url = "git+https://github.com/christopherpow/nes-test-roms#95d8f621ae55cee0d09b91519a8989ae0e64753b",
+            .hash = "N-V-__8AANPxaAENPnXYuDVuqgUcOdrux1zKqz8bZZYf0RA2",
+        },
+    },
+    .paths = .{"."},
+}
